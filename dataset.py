@@ -9,81 +9,46 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets import CelebA
 import zipfile
+import matplotlib.pyplot as plt
 
 
-# Add your custom dataset class here
-class MyDataset(Dataset):
-    def __init__(self):
-        pass
-    
-    
-    def __len__(self):
-        pass
-    
-    def __getitem__(self, idx):
-        pass
 
-
-class MyCelebA(CelebA):
+class MyCustomDataset(Dataset):
     """
-    A work-around to address issues with pytorch's celebA dataset class.
-    
-    Download and Extract
-    URL : https://drive.google.com/file/d/1m8-EBPgi5MRubrm6iQjafK2QMHDBMSfJ/view?usp=sharing
+    Custom dataset per 200k immagini di 256x256 px.
     """
-    
-    def _check_integrity(self) -> bool:
-        return True
-    
-    
-
-class OxfordPets(Dataset):
-    """
-    URL = https://www.robots.ox.ac.uk/~vgg/data/pets/
-    """
-    def __init__(self, 
-                 data_path: str, 
-                 split: str,
-                 transform: Callable,
-                **kwargs):
-        self.data_dir = Path(data_path) / "OxfordPets"        
+    def __init__(self, data_path: str, transform: Optional[Callable] = None):
+        self.data_dir = Path(data_path)
         self.transforms = transform
-        imgs = sorted([f for f in self.data_dir.iterdir() if f.suffix == '.jpg'])
-        
-        self.imgs = imgs[:int(len(imgs) * 0.75)] if split == "train" else imgs[int(len(imgs) * 0.75):]
+        self.imgs = sorted([f for f in self.data_dir.glob("*.jpg")])  # Assumendo che le immagini siano tutte in formato .jpg
+        if not self.data_dir.exists():
+            print(f"Data directory {self.data_dir} does not exist.")
+        else:
+            print(f"Found {len(self.imgs)} images in {self.data_dir}")
     
     def __len__(self):
         return len(self.imgs)
     
     def __getitem__(self, idx):
         img = default_loader(self.imgs[idx])
-        
         if self.transforms is not None:
             img = self.transforms(img)
-        
-        return img, 0.0 # dummy datat to prevent breaking 
+        return img, 0.0  # dummy data per evitare errori
+    
+    def visualize_sample(self, idx):
+        img, _ = self.__getitem__(idx)
+        img = img.numpy().transpose(1, 2, 0)
+        img = (img * 0.5) + 0.5  # Denormalize if normalized to [-1, 1]
+        plt.imshow(img)
+        plt.show()
+ 
 
 class VAEDataset(LightningDataModule):
-    """
-    PyTorch Lightning data module 
-
-    Args:
-        data_dir: root directory of your dataset.
-        train_batch_size: the batch size to use during training.
-        val_batch_size: the batch size to use during validation.
-        patch_size: the size of the crop to take from the original images.
-        num_workers: the number of parallel workers to create to load data
-            items (see PyTorch's Dataloader documentation for more details).
-        pin_memory: whether prepared items should be loaded into pinned memory
-            or not. This can improve performance on GPUs.
-    """
-
     def __init__(
         self,
         data_path: str,
         train_batch_size: int = 8,
         val_batch_size: int = 8,
-        patch_size: Union[int, Sequence[int]] = (256, 256),
         num_workers: int = 0,
         pin_memory: bool = False,
         **kwargs,
@@ -93,65 +58,35 @@ class VAEDataset(LightningDataModule):
         self.data_dir = data_path
         self.train_batch_size = train_batch_size
         self.val_batch_size = val_batch_size
-        self.patch_size = patch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
 
     def setup(self, stage: Optional[str] = None) -> None:
-#       =========================  OxfordPets Dataset  =========================
-            
-#         train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-#                                               transforms.CenterCrop(self.patch_size),
-# #                                               transforms.Resize(self.patch_size),
-#                                               transforms.ToTensor(),
-#                                                 transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))])
-        
-#         val_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-#                                             transforms.CenterCrop(self.patch_size),
-# #                                             transforms.Resize(self.patch_size),
-#                                             transforms.ToTensor(),
-#                                               transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))])
+        # Trasformazioni senza ridimensionamento, adatte per immagini 256x256
+        train_transforms = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Normalizes to [-1, 1]
+        ])
 
-#         self.train_dataset = OxfordPets(
-#             self.data_dir,
-#             split='train',
-#             transform=train_transforms,
-#         )
-        
-#         self.val_dataset = OxfordPets(
-#             self.data_dir,
-#             split='val',
-#             transform=val_transforms,
-#         )
-        
-#       =========================  CelebA Dataset  =========================
-    
-        train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                              transforms.CenterCrop(148),
-                                              transforms.Resize(self.patch_size),
-                                              transforms.ToTensor(),])
-        
-        val_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                            transforms.CenterCrop(148),
-                                            transforms.Resize(self.patch_size),
-                                            transforms.ToTensor(),])
-        
-        self.train_dataset = MyCelebA(
+        val_transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+        # Usa il tuo nuovo dataset
+        self.train_dataset = MyCustomDataset(
             self.data_dir,
-            split='train',
             transform=train_transforms,
-            download=False,
         )
-        
-        # Replace CelebA with your dataset
-        self.val_dataset = MyCelebA(
+
+        self.val_dataset = MyCustomDataset(
             self.data_dir,
-            split='test',
             transform=val_transforms,
-            download=False,
         )
-#       ===============================================================
-        
+        self.train_dataset.visualize_sample(0)  # Visualize the first image
+        self.val_dataset.visualize_sample(0)  # Visualize the first image
+
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
@@ -169,7 +104,7 @@ class VAEDataset(LightningDataModule):
             shuffle=False,
             pin_memory=self.pin_memory,
         )
-    
+
     def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
         return DataLoader(
             self.val_dataset,
@@ -178,4 +113,3 @@ class VAEDataset(LightningDataModule):
             shuffle=True,
             pin_memory=self.pin_memory,
         )
-     

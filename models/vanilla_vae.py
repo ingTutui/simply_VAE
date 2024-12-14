@@ -11,7 +11,8 @@ class VanillaVAE(BaseVAE):
     def __init__(self,
                  in_channels: int,
                  latent_dim: int,
-                 hidden_dims: List = None,
+                hidden_dims: List = None,
+                # hidden_dims: List = [32, 64, 128, 256],
                  **kwargs) -> None:
         super(VanillaVAE, self).__init__()
 
@@ -26,15 +27,16 @@ class VanillaVAE(BaseVAE):
             modules.append(
                 nn.Sequential(
                     nn.Conv2d(in_channels, out_channels=h_dim,
-                              kernel_size= 3, stride= 2, padding  = 1),
+                            kernel_size=3, stride=2, padding=1),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
             )
             in_channels = h_dim
 
         self.encoder = nn.Sequential(*modules)
-        self.fc_mu = nn.Linear(hidden_dims[-1]*4, latent_dim)
-        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
+        # Update the input size for fc_mu and fc_var
+        self.fc_mu = nn.Linear(hidden_dims[-1] * 8 * 8, latent_dim)
+        self.fc_var = nn.Linear(hidden_dims[-1] * 8 * 8, latent_dim)
 
 
         # Build Decoder
@@ -62,17 +64,22 @@ class VanillaVAE(BaseVAE):
         self.decoder = nn.Sequential(*modules)
 
         self.final_layer = nn.Sequential(
-                            nn.ConvTranspose2d(hidden_dims[-1],
-                                               hidden_dims[-1],
-                                               kernel_size=3,
-                                               stride=2,
-                                               padding=1,
-                                               output_padding=1),
-                            nn.BatchNorm2d(hidden_dims[-1]),
-                            nn.LeakyReLU(),
-                            nn.Conv2d(hidden_dims[-1], out_channels= 3,
-                                      kernel_size= 3, padding= 1),
-                            nn.Tanh())
+            nn.ConvTranspose2d(hidden_dims[-1], hidden_dims[-1],
+                            kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(hidden_dims[-1]),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(hidden_dims[-1], hidden_dims[-1],
+                            kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(hidden_dims[-1]),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(hidden_dims[-1], hidden_dims[-1],
+                            kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(hidden_dims[-1]),
+            nn.LeakyReLU(),
+            nn.Conv2d(hidden_dims[-1], out_channels=3,
+                    kernel_size=3, padding=1),
+            nn.Tanh()
+        )
 
     def encode(self, input: Tensor) -> List[Tensor]:
         """
@@ -88,6 +95,7 @@ class VanillaVAE(BaseVAE):
         # of the latent Gaussian distribution
         mu = self.fc_mu(result)
         log_var = self.fc_var(result)
+        log_var = torch.clamp(log_var, min=-10, max=10)
 
         return [mu, log_var]
 
@@ -136,13 +144,21 @@ class VanillaVAE(BaseVAE):
         mu = args[2]
         log_var = args[3]
 
-        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
-        recons_loss =F.mse_loss(recons, input)
+        kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
+        recons_loss = F.mse_loss(recons, input)
 
+        # KLD loss
+        kld_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=1)
+        kld_loss = torch.mean(kld_loss, dim=0)
 
-        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+        # Ensure kld_loss is finite
+        if torch.isinf(kld_loss) or torch.isnan(kld_loss):
+            print("KLD Loss is inf or nan, setting it to zero")
+            kld_loss = torch.tensor(0.0, device=kld_loss.device)
 
         loss = recons_loss + kld_weight * kld_loss
+        # print(f"Reconstruction Loss: {recons_loss.item()}, KLD Loss: {kld_loss.item()}, Total Loss: {loss.item()}")
+
         return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
 
     def sample(self,
